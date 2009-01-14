@@ -1,0 +1,27 @@
+---
+abstract: 'Documentation generator for ORLite'
+author:
+  - 'Adam Kennedy <adamk\@cpan.org>'
+build_requires:
+  Test::More: 0.47
+  Test::Script: 1.03
+distribution_type: module
+generated_by: 'Module::Install version 0.77'
+license: perl
+meta-spec:
+  url: http://module-build.sourceforge.net/META-spec-v1.4.html
+  version: 1.4
+module_name: ORLite::Pod
+name: ORLite-Pod
+no_index:
+  directory:
+    - inc
+    - t
+requires:
+  File::Spec: 0.80
+  ORLite: 1.17
+  Params::Util: 0.33
+  perl: 5.6.0
+resources:
+  license: http://dev.perl.org/licenses/
+version: 0.01
