@@ -18,10 +18,12 @@ no_index:
     - inc
     - t
 requires:
+  Class::Inspector: 1.23
   File::Spec: 0.80
   ORLite: 1.17
   Params::Util: 0.33
+  Template: 2.20
   perl: 5.6.0
 resources:
   license: http://dev.perl.org/licenses/
-version: 0.02
+version: 0.05

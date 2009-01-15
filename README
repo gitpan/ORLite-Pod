@@ -2,13 +2,14 @@ NAME
     ORLite::Pod - Documentation generator for ORLite
 
 SYNOPSIS
-      orlite2pod Class::Name
+      my $generator = ORLite::Pod->new(
+          from => 'My::Project::DB',
+          to   => 'My-Project/lib',
+      );
+  
+      $generator->run;
 
 DESCRIPTION
-    *This initial release is intended to test whether or not search.cpan.org
-    gets confused by the heredoc POD fragments in this file. Use of this
-    module is not recommended for any users at this time*
-
     THIS MODULE IS EXPERIMENTAL AND SUBJECT TO CHANGE WITHOUT NOTICE.
 
     YOU HAVE BEEN WARNED!

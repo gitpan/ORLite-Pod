@@ -8,13 +8,14 @@ ORLite::Pod - Documentation generator for ORLite
 
 =head1 SYNOPSIS
 
-  orlite2pod Class::Name
+  my $generator = ORLite::Pod->new(
+      from => 'My::Project::DB',
+      to   => 'My-Project/lib',
+  );
+  
+  $generator->run;
 
 =head1 DESCRIPTION
-
-I<This initial release is intended to test whether or not search.cpan.org
-gets confused by the heredoc POD fragments in this file. Use of this
-module is not recommended for any users at this time>
 
 B<THIS MODULE IS EXPERIMENTAL AND SUBJECT TO CHANGE WITHOUT NOTICE.>
 
@@ -43,15 +44,19 @@ TO BE COMPLETED
 
 use 5.006;
 use strict;
-use Carp         ();
-use File::Spec   ();
-use Params::Util qw{_CLASS};
-use ORLite       ();
+use Carp            ();
+use File::Spec      ();
+use Params::Util    qw{_CLASS};
+use Class::Inspector ();
+use ORLite          ();
+use Template        ();
 
 use vars qw{$VERSION};
 BEGIN {
-	$VERSION = '0.02';
+	$VERSION = '0.05';
 }
+
+my $now = (localtime(time))[5] + 1900;
 
 
 
@@ -82,6 +87,24 @@ sub new {
 	unless ( -w $self->to ) {
 		die("No permission to write to directory '$to'");
 	}
+	unless ( $self->author ) {
+		$self->{author} = "The Author";
+	}
+	unless ( $self->year ) {
+		$self->{year} = $now;
+	}
+
+	# Create the copyright year
+	if ( $self->{year} == $now ) {
+		$self->{copyyear} = $self->{year};
+	} else {
+		$self->{copyyear} = "$self->{year} - $now";
+	}
+
+	# Create the Template Toolkit context
+	$self->{template} = Template->new( {
+		PRE_CHOMP => 1,
+	} );
 
 	return $self;
 }
@@ -92,6 +115,18 @@ sub from {
 
 sub to {
 	$_[0]->{to};
+}
+
+sub author {
+	$_[0]->{author};
+}
+
+sub year {
+	$_[0]->{year};
+}
+
+sub template {
+	$_[0]->{template};
 }
 
 
@@ -107,7 +142,7 @@ sub run {
 
 	# Capture the raw schema information
 	print( "Analyzing " . $pkg->dsn . "...\n" );
-	my $dbh  = $pkg->dbh;
+	my $dbh    = $pkg->dbh;
 	my $tables = $dbh->selectall_arrayref(
 		'select * from sqlite_master where type = ?',
 		{ Slice => {} }, 'table',
@@ -166,12 +201,12 @@ sub run {
 	}
 
 	# Generate the root module .pod file
-	$self->write_root( $tables );
+	$self->write_db( $tables );
 
 	# Generate the table .pod files
 	foreach my $table ( @$tables ) {
 		# Skip tables we aren't modelling
-		next unless $table->{class}->can('new');
+		next unless $table->{class}->can('select');
 
 		# Generate the table-specific file
 		$self->write_table( $tables, $table );
@@ -187,25 +222,100 @@ sub run {
 #####################################################################
 # Generation of Base Documentation
 
-sub write_root {
-	my $self   = shift;
-	my $tables = shift;
+sub _write {
+	my $self  = shift;
+	my $file  = shift;
+	my $input = shift;
+	my $hash  = shift;
+
+	# Strip the leading pipes off the template
+	$input =~ s/^\|//gm;
+
+	# Process the template
+	my $template = $self->template;
+	my $output   = '';
+	$template->process(\$input, $hash, \$output) or die $template->error;
+
+	# Write the file
+	local *FILE;
+	open( FILE, '>', $file ) or die "open: $!";
+	print FILE $output;
+	close FILE;
+
+	return 1;	
+}
+
+sub write_db {
+	my $self    = shift;
+	my $tables  = shift;
+	my $pkg     = $self->from;
+	my $methods = Class::Inspector->methods($pkg);
 
 	# Determine the file we're going to be writing to
-	my $pkg = $self->from;
+	my $file    = File::Spec->catfile(
+		$self->to,
+		 split( /::/, $pkg )
+	) . '.pod';
+
+	# Generate and write the file
+	print "Generating $file...\n";
+	$self->_write( $file, template_db(), {
+		self   => $self,
+		pkg    => $pkg,
+		tables => $tables,
+		method => {
+			map { $_ => 1 } @$methods,
+		},
+	} );
+}
+
+
+
+
+
+#####################################################################
+# Generation of Table-Specific Documentation
+
+sub write_table {
+	my $self   = shift;
+	my $tables = shift;
+	my $table  = shift;
+	my $root   = $self->from;
+	my $pkg    = $table->{class};
+	my $methods = Class::Inspector->methods($pkg);
+
+	# Determine the file we're going to be writing to
 	my $file = File::Spec->catfile(
 		$self->to,
 		 split( /::/, $pkg )
 	) . '.pod';
 
-	# Start writing the file
+
+	# Generate and write the file
 	print "Generating $file...\n";
-	local *FILE;
-	open( FILE, '>', $file ) or die "open: $!";
-	_print( <<"END_POD" );
+	$self->_write( $file, template_table(), {
+		self   => $self,
+		pkg    => $pkg,
+		root   => $root,
+		tables => $tables,
+		table  => $table,
+		method => {
+			map { $_ => 1 } @$methods,
+		},
+	} );
+}
+
+
+
+
+
+#####################################################################
+# Root Template
+
+sub template_db { <<"END_TT" }
 |=head1 NAME
 |
-|$pkg - An ORLite-based ORM Database API
+|[%+ pkg %] - An ORLite-based ORM Database API
 |
 |=head1 SYNOPSIS
 |
@@ -217,12 +327,7 @@ sub write_root {
 |
 |=head1 METHODS
 |
-END_POD
-
-
-
-	# Add pod for each method that is defined
-	_print( <<"END_POD" ) if $pkg->can('dsn');
+[% IF method.dsn %]
 |=head2 dsn
 |
 |  my \$string = Foo::Bar->dsn;
@@ -230,11 +335,8 @@ END_POD
 |The C<dsn> accessor returns the dbi connection string used to connect
 |to the SQLite database as a string.
 |
-END_POD
-
-
-
-	_print( <<"END_POD" ) if $pkg->can('dbh');
+[% END %]
+[% IF method.dbh %]
 |=head2 dbh
 |
 |  my \$handle = Foo::Bar->dbh;
@@ -272,11 +374,8 @@ END_POD
 |The C<dbh> method returns a L<DBI::db> object, or throws an exception on
 |error.
 |
-END_POD
-
-
-
-	_print( <<"END_POD" ) if $pkg->can('begin');
+[% END %]
+[% IF method.begin %]
 |=head2 begin
 |
 |  Foo::Bar->begin;
@@ -292,11 +391,8 @@ END_POD
 |
 |Returns true or throws an exception on error.
 |
-END_POD
-
-
-
-	_print( <<"END_POD" ) if $pkg->can('commit');
+[% END %]
+[% IF method.commit %]
 |=head2 commit
 |
 |  Foo::Bar->commit;
@@ -310,11 +406,8 @@ END_POD
 |
 |Returns true or throws an exception on error.
 |
-END_POD
-
-
-
-	_print( <<"END_POD" ) if $pkg->can('rollback');
+[% END %]
+[% IF method.rollback %]
 |=head2 rollback
 |
 |The C<rollback> method rolls back the current transaction. If called outside
@@ -342,11 +435,8 @@ END_POD
 |It takes the same parameters and has the same return values and error
 |behaviour.
 |
-END_POD
-
-
-
-	_print( <<"END_POD" ) if $pkg->can('selectall_arrayref');
+[% END %]
+[% IF method.selectall_arrayref %]
 |=head2 selectall_arrayref
 |
 |The C<selectall_arrayref> method is a direct wrapper around the equivalent
@@ -356,11 +446,8 @@ END_POD
 |It takes the same parameters and has the same return values and error
 |behaviour.
 |
-END_POD
-
-
-
-	_print( <<"END_POD" ) if $pkg->can('selectall_hashref');
+[% END %]
+[% IF method.selectall_hashref %]
 |=head2 selectall_hashref
 |
 |The C<selectall_hashref> method is a direct wrapper around the equivalent
@@ -370,11 +457,8 @@ END_POD
 |It takes the same parameters and has the same return values and error
 |behaviour.
 |
-END_POD
-
-
-
-	_print( <<"END_POD" ) if $pkg->can('selectcol_arrayref');
+[% END %]
+[% IF method.selectcol_arrayref %]
 |=head2 selectcol_arrayref
 |
 |The C<selectcol_arrayref> method is a direct wrapper around the equivalent
@@ -384,11 +468,8 @@ END_POD
 |It takes the same parameters and has the same return values and error
 |behaviour.
 |
-END_POD
-
-
-
-	_print( <<"END_POD" ) if $pkg->can('selectrow_array');
+[% END %]
+[% IF method.selectrow_array %]
 |=head2 selectrow_array
 |
 |The C<selectrow_array> method is a direct wrapper around the equivalent
@@ -398,11 +479,8 @@ END_POD
 |It takes the same parameters and has the same return values and error
 |behaviour.
 |
-END_POD
-
-
-
-	_print( <<"END_POD" ) if $pkg->can('selectrow_arrayref');
+[% END %]
+[% IF method.selectrow_arrayref %]
 |=head2 selectrow_arrayref
 |
 |The C<selectrow_arrayref> method is a direct wrapper around the equivalent
@@ -412,11 +490,8 @@ END_POD
 |It takes the same parameters and has the same return values and error
 |behaviour.
 |
-END_POD
-
-
-
-	_print( <<"END_POD" ) if $pkg->can('selectrow_hashref');
+[% END %]
+[% IF method.selectrow_hashref %]
 |=head2 selectrow_hashref
 |
 |The C<selectrow_hashref> method is a direct wrapper around the equivalent
@@ -426,11 +501,8 @@ END_POD
 |It takes the same parameters and has the same return values and error
 |behaviour.
 |
-END_POD
-
-
-
-	_print( <<"END_POD" ) if $pkg->can('prepare');
+[% END %]
+[% IF method.prepare %]
 |=head2 prepare
 |
 |The C<prepare> method is a direct wrapper around the equivalent
@@ -444,11 +516,8 @@ END_POD
 |statements if possible, although this is only a recommendation and by
 |no means prohibited.
 |
-END_POD
-
-
-
-	_print( <<"END_POD" ) if $pkg->can('pragma');
+[% END %]
+[% IF method.pragma %]
 |=head2 pragma
 |
 |  # Get the user_version for the schema
@@ -457,13 +526,10 @@ END_POD
 |The C<pragma> method provides a convenient method for fetching a pragma
 |for a datase. See the SQLite documentation for more details.
 |
-END_POD
-
-	# Add a footer
-	_print( <<"END_POD" );
+[% END %]
 |=head1 SUPPORT
 |
-|$pkg is based on L<ORLite> $ORLite::VERSION.
+|[%+ pkg %] is based on L<ORLite> $ORLite::VERSION.
 |
 |Documentation created by L<ORLite::Pod> $ORLite::Pod::VERSION.
 |
@@ -472,11 +538,11 @@ END_POD
 |
 |=head1 AUTHOR
 |
-|Adam Kennedy E<lt>adamk\@cpan.orgE<gt>
+|[%+ self.author %]
 |
 |=head1 COPYRIGHT
 |
-|Copyright 2009 Adam Kennedy.
+|Copyright [% self.copyyear %] [% self.author %].
 |
 |This program is free software; you can redistribute
 |it and/or modify it under the same terms as Perl itself.
@@ -484,40 +550,19 @@ END_POD
 |The full text of the license can be found in the
 |LICENSE file included with this module.
 |
-END_POD
-
-	close FILE;
-	return 1;
-}
+END_TT
 
 
 
 
 
 #####################################################################
-# Generation of Table-Specific Documentation
+# Table Template
 
-sub write_table {
-	my $self   = shift;
-	my $tables = shift;
-	my $table  = shift;
-
-	# Determine the file we're going to be writing to
-	my $root = $self->from;
-	my $pkg  = $table->{class};
-	my $file = File::Spec->catfile(
-		$self->to,
-		 split( /::/, $pkg )
-	) . '.pod';
-
-	# Start writing the file
-	print "Generating $file...\n";
-	local *FILE;
-	open( FILE, '>', $file ) or die "open: $!";
-	_print( <<"END_POD" );
+sub template_table { <<"END_TT" }
 |=head1 NAME
 |
-|$pkg - $root class for the $table->{name} table
+|[%+ pkg %] - [% root %] class for the [% table.name %] table
 |
 |=head1 SYNOPSIS
 |
@@ -529,77 +574,175 @@ sub write_table {
 |
 |=head1 METHODS
 |
-END_POD
-
-	_print( <<"END_POD" ) if $pkg->can('select');
+[% IF method.select %]
 |=head2 select
 |
 |  # Get all objects in list context
-|  my \@list = $pkg->select;
+|  my \@list = [% pkg %]->select;
 |  
 |  # Get a subset of objects in scalar context
-|  my \$array_ref = $pkg->select(
-|      'where $table->{pk} > ? order by $table->{pk}',
+|  my \$array_ref = [% pkg %]->select(
+|      'where [% table.pk %] > ? order by [% table.pk %]',
 |      1000,
 |  );
 |
 |The C<select> method executes a typical SQL C<SELECT> query on the
-|$table->{name} table.
+|[%+ table.name %] table.
 |
 |It takes an optional argument of a SQL phrase to be added after the
-|C<FROM $table->{name}> section of the query, followed by variables
-|to be used for any placeholders in the conditions. Any SQL that is
+|C<FROM [% table.name %]> section of the query, followed by variables
+|to be bound to the placeholders in the SQL phrase. Any SQL that is
 |compatible with SQLite can be used in the parameter.
 |
-|Returns a list of B<$pkg> objects when called in list context, or a
-|reference to an ARRAY of B<$pkg> objects when called in scalar context.
+|Returns a list of B<[% pkg %]> objects when called in list context, or a
+|reference to an ARRAY of B<[% pkg %]> objects when called in scalar context.
 |
 |Throws an exception on error, typically directly from the L<DBI> layer.
 |
-END_POD
-
-	_print( <<"END_POD" ) if $pkg->can('count');
+[% END %]
+[% IF method.count %]
 |=head2 count
 |
 |  # How many objects are in the table
-|  my \$rows = $pkg->count;
+|  my \$rows = [% pkg %]->count;
 |  
 |  # How many objects 
-|  my \$small = $pkg->count(
-|      'where $table->{pk} > ?',
+|  my \$small = [% pkg %]->count(
+|      'where [% table.pk %] > ?',
 |      1000,
 |  );
 |
 |The C<count> method executes a C<SELECT COUNT(*)> query on the
-|$table->{name} table.
+|[%+ table.name %] table.
 |
 |It takes an optional argument of a SQL phrase to be added after the
-|C<FROM $table->{name}> section of the query, followed by variables
-|to be used for any placeholders in the conditions. Any SQL that is
+|C<FROM [% table.name %]> section of the query, followed by variables
+|to be bound to the placeholders in the SQL phrase. Any SQL that is
 |compatible with SQLite can be used in the parameter.
 |
 |Returns the number of objects that match the condition.
 |
 |Throws an exception on error, typically directly from the L<DBI> layer.
 |
-END_POD
-
-
-	# Add a footer
-	_print( <<"END_POD" );
+[% END %]
+[% IF method.new %]
+|=head2 new
+|
+|  TO BE COMPLETED
+|
+|The C<new> constructor is used to create a new abstract object that
+|is not (yet) written to the database.
+|
+|Returns a new L<[% pkg %]> object.
+|
+[% END %]
+[% IF method.create %]
+|=head2 create
+|
+|  TO BE COMPLETED
+|
+|The C<create> constructor is a one-step combination of C<new> and
+|C<insert> that takes the column parameters, creates a new
+|L<[% pkg %]> object, inserts the appropriate row into the L<[% table.name %]>
+|table, and then returns the object.
+|
+|If the primary key column C<[% table.pk %]> is not provided to the
+|constructor (or it is false) the object returned will have
+|C<[% table.pk %]> set to the new unique identifier.
+| 
+|Returns a new L<[% table.name %]> object, or throws an exception on error,
+|typically from the L<DBI> layer.
+|
+[% END %]
+[% IF method.insert %]
+|=head2 insert
+|
+|  \$object->insert;
+|
+|The C<insert> method commits a new object (created with the C<new> method)
+|into the database.
+|
+|If a the primary key column C<[% table.pk %]> is not provided to the
+|constructor (or it is false) the object returned will have
+|C<[% table.pk %]> set to the new unique identifier.
+|
+|Returns the object itself as a convenience, or throws an exception
+|on error, typically from the L<DBI> layer.
+|
+[% END %]
+[% IF method.delete %]
+|=head2 delete
+|
+|  # Delete a single instantiated object
+|  \$object->delete;
+|  
+|  # Delete multiple rows from the [% table.name %] table
+|  [%+ pkg %]->delete('where [% table.pk %] > ?', 1000);
+|
+|The C<delete> method can be used in a class form and an instance form.
+|
+|When used on an existing B<[% pkg %]> instance, the C<delete> method
+|removes that specific instance from the C<[% table.name %]>, leaving
+|the object ntact for you to deal with post-delete actions as you wish.
+|
+|When used as a class method, it takes a compulsory argument of a SQL
+|phrase to be added after the C<DELETE FROM [% table.name %]> section
+|of the query, followed by variables to be bound to the placeholders
+|in the SQL phrase. Any SQL that is compatible with SQLite can be used
+|in the parameter.
+|
+|Returns true on success or throws an exception on error, or if you
+|attempt to call delete without a SQL condition phrase.
+|
+[% END %]
+[% IF method.truncate %]
+|=head2 truncate
+|
+|  # Delete all records in the [% table.name %] table
+|  [%+ pkg %]->truncate;
+|
+|To prevent the common and extremely dangerous error case where
+|deletion is called accidentally without providing a condition,
+|the use of the C<delete> method without a specific condition
+|is forbidden.
+|
+|Instead, the distinct method C<truncate> is provided to delete
+|all records in a table with specific intent.
+|
+|Returns true, or throws an exception on error.
+|
+[% END %]
+|=head1 ACCESSORS
+|
+[% pk = table.pk %]
+[% IF method.\$pk %]
+|=head2 [% pk %]
+|
+|  if ( \$object->[% pk %] ) {
+|      print "Object has been inserted\\n";
+|  } else {
+|      print "Object has not been inserted\\n";
+|  }
+|
+|Returns true, or throws an exception on error.
+|
+[% END %]
+|
+|REMAINING ACCESSORS TO BE COMPLETED
+|
 |=head1 SUPPORT
 |
-|$pkg is part of the L<$root> API.
+|[%+ pkg %] is part of the L<[% root %]> API.
 |
-|See the documentation for L<$root> for more information.
+|See the documentation for L<[% root %]> for more information.
 |
 |=head1 AUTHOR
 |
-|Adam Kennedy E<lt>adamk\@cpan.orgE<gt>
+|[%+ self.author %]
 |
 |=head1 COPYRIGHT
 |
-|Copyright 2009 Adam Kennedy.
+|Copyright [% self.copyyear %] [% self.author %].
 |
 |This program is free software; you can redistribute
 |it and/or modify it under the same terms as Perl itself.
@@ -607,24 +750,7 @@ END_POD
 |The full text of the license can be found in the
 |LICENSE file included with this module.
 |
-END_POD
-
-	close FILE;
-	return 1;
-}
-
-
-
-
-
-#####################################################################
-# Support Functions
-
-sub _print {
-	my $string = shift;
-	$string =~ s/^\|//gm;
-	print FILE $string;
-}
+END_TT
 
 1;
 
