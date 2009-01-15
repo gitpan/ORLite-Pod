@@ -3,8 +3,9 @@ NAME
 
 SYNOPSIS
       my $generator = ORLite::Pod->new(
-          from => 'My::Project::DB',
-          to   => 'My-Project/lib',
+          from   => 'My::Project::DB',
+          to     => 'My-Project/lib',
+          author => 'Adam Kennedy',
       );
   
       $generator->run;

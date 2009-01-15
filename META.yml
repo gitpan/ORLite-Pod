@@ -19,11 +19,14 @@ no_index:
     - t
 requires:
   Class::Inspector: 1.23
+  File::Basename: 0
+  File::Path: 2.07
   File::Spec: 0.80
+  Getopt::Long: 0
   ORLite: 1.17
   Params::Util: 0.33
   Template: 2.20
   perl: 5.6.0
 resources:
   license: http://dev.perl.org/licenses/
-version: 0.05
+version: 0.06
