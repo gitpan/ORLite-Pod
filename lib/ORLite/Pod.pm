@@ -12,15 +12,12 @@ ORLite::Pod - Documentation generator for ORLite
       from   => 'My::Project::DB',
       to     => 'My-Project/lib',
       author => 'Adam Kennedy',
+      email  => 'adamk@cpan.org',
   );
   
   $generator->run;
 
 =head1 DESCRIPTION
-
-B<THIS MODULE IS EXPERIMENTAL AND SUBJECT TO CHANGE WITHOUT NOTICE.>
-
-B<YOU HAVE BEEN WARNED!>
 
 The biggest downside of L<ORLite> is that because it can generate you
 an entire ORM in one line of code, you can have a large an extensive
@@ -43,23 +40,21 @@ TO BE COMPLETED
 
 =cut
 
-use 5.006;
+use 5.008;
 use strict;
-use Carp             ();
-use File::Spec       ();
-use File::Path       ();
-use File::Basename   ();
-use Params::Util     ();
-use Class::Inspector ();
-use ORLite           ();
-use Template         ();
+use Carp                    ();
+use File::Spec       3.2701 ();
+use File::Path         2.07 ();
+use File::Basename        0 ();
+use Params::Util       1.00 ();
+use Class::Inspector   1.23 ();
+use ORLite             1.23 ();
+use Template           2.20 ();
+use SQL::Beautify      0.03 ();
 
-use vars qw{$VERSION};
-BEGIN {
-	$VERSION = '0.06';
-}
+our $VERSION = '0.08';
 
-my $now = (localtime(time))[5] + 1900;
+my $year = (localtime(time))[5] + 1900;
 
 
 
@@ -71,6 +66,12 @@ my $now = (localtime(time))[5] + 1900;
 sub new {
 	my $class = shift;
 	my $self  = bless { @_ }, $class;
+
+	# Normalise flags
+	unless ( defined $self->trace ) {
+		$self->{trace} = 1;
+	}
+	$self->{trace} = !! $self->{trace};
 
 	# Check params
 	unless (
@@ -90,18 +91,21 @@ sub new {
 	unless ( -w $self->to ) {
 		die("No permission to write to directory '$to'");
 	}
-	unless ( $self->author ) {
-		$self->{author} = "The Author";
+	unless ( defined $self->author ) {
+		$self->{author} = '';
+	}
+	unless ( defined $self->email ) {
+		$self->{email} = '';
 	}
 	unless ( $self->year ) {
-		$self->{year} = $now;
+		$self->{year} = $year;
 	}
 
 	# Create the copyright year
-	if ( $self->{year} == $now ) {
+	if ( $self->{year} == $year ) {
 		$self->{copyyear} = $self->{year};
 	} else {
-		$self->{copyyear} = "$self->{year} - $now";
+		$self->{copyyear} = "$self->{year} - $year";
 	}
 
 	# Create the Template Toolkit context
@@ -130,6 +134,21 @@ sub author {
 	$_[0]->{author};
 }
 
+sub author_pod {
+	my $self = shift;
+	if ( $self->author and $self->email ) {
+		return $self->author . ' E<lt>' . $self->email . 'E<gt>';
+	} elsif ( $self->author ) {
+		return $self->author;
+	} else {
+		return '';
+	}
+}
+
+sub email {
+	$_[0]->{email};
+}
+
 sub year {
 	$_[0]->{year};
 }
@@ -150,7 +169,7 @@ sub run {
 	my $pkg  = $self->from;
 
 	# Capture the raw schema information
-	print( "Analyzing " . $pkg->dsn . "...\n" );
+	$self->trace("Analyzing " . $pkg->dsn . "...\n");
 	my $dbh    = $pkg->dbh;
 	my $tables = $dbh->selectall_arrayref(
 		'select * from sqlite_master where type = ?',
@@ -214,6 +233,11 @@ sub run {
 
 	# Generate the table .pod files
 	foreach my $table ( @$tables ) {
+		# Beautify the create fragment
+		$table->{create} = SQL::Beautify->new(
+			query  => $table->{sql}->{create},
+		)->beautify;
+
 		# Skip tables we aren't modelling
 		next unless $table->{class}->can('select');
 
@@ -231,7 +255,7 @@ sub run {
 #####################################################################
 # Generation of Base Documentation
 
-sub _write {
+sub write {
 	my $self  = shift;
 	my $file  = shift;
 	my $input = shift;
@@ -243,7 +267,10 @@ sub _write {
 	# Process the template
 	my $template = $self->template;
 	my $output   = '';
-	$template->process(\$input, $hash, \$output) or die $template->error;
+	my $rv       = $template->process(\$input, $hash, \$output);
+	unless ( $rv ) {
+		die $template->error;
+	}
 
 	# Write the file
 	local *FILE;
@@ -254,6 +281,14 @@ sub _write {
 	return 1;	
 }
 
+sub trace {
+	my $self = shift;
+	if ( $self->{trace} ) {
+		print @_;
+	}
+	return 1;
+}
+
 sub write_db {
 	my $self    = shift;
 	my $tables  = shift;
@@ -261,18 +296,19 @@ sub write_db {
 	my $methods = Class::Inspector->methods($pkg);
 
 	# Determine the file we're going to be writing to
-	my $file    = File::Spec->catfile(
+	my $file = File::Spec->catfile(
 		$self->to,
 		 split( /::/, $pkg )
 	) . '.pod';
 
 	# Generate and write the file
-	print "Generating $file...\n";
-	$self->_write( $file, template_db(), {
-		self   => $self,
-		pkg    => $pkg,
-		tables => $tables,
-		method => {
+	$self->trace("Generating $file...\n");
+	$self->write( $file, template_db(), {
+		self       => $self,
+		pkg        => $pkg,
+		tables     => $tables,
+		orlite2pod => $ORLite::Pod::VERSION,
+		method     => {
 			map { $_ => 1 } @$methods,
 		},
 	} );
@@ -286,11 +322,11 @@ sub write_db {
 # Generation of Table-Specific Documentation
 
 sub write_table {
-	my $self   = shift;
-	my $tables = shift;
-	my $table  = shift;
-	my $root   = $self->from;
-	my $pkg    = $table->{class};
+	my $self    = shift;
+	my $tables  = shift;
+	my $table   = shift;
+	my $root    = $self->from;
+	my $pkg     = $table->{class};
 	my $methods = Class::Inspector->methods($pkg);
 
 	# Determine the file we're going to be writing to
@@ -306,8 +342,8 @@ sub write_table {
 	}
 
 	# Generate and write the file
-	print "Generating $file...\n";
-	$self->_write( $file, template_table(), {
+	$self->trace("Generating $file...\n");
+	$self->write( $file, template_table(), {
 		self   => $self,
 		pkg    => $pkg,
 		root   => $root,
@@ -326,14 +362,10 @@ sub write_table {
 #####################################################################
 # Root Template
 
-sub template_db { <<"END_TT" }
+sub template_db { <<'END_TT' }
 |=head1 NAME
 |
 |[%+ pkg %] - An ORLite-based ORM Database API
-|
-|=head1 SYNOPSIS
-|
-|  TO BE COMPLETED
 |
 |=head1 DESCRIPTION
 |
@@ -344,18 +376,18 @@ sub template_db { <<"END_TT" }
 [% IF method.dsn %]
 |=head2 dsn
 |
-|  my \$string = Foo::Bar->dsn;
+|  my $string = [%+ pkg %]->dsn;
 |
-|The C<dsn> accessor returns the dbi connection string used to connect
+|The C<dsn> accessor returns the L<DBI> connection string used to connect
 |to the SQLite database as a string.
 |
 [% END %]
 [% IF method.dbh %]
 |=head2 dbh
 |
-|  my \$handle = Foo::Bar->dbh;
+|  my $handle = [%+ pkg %]->dbh;
 |
-|To reliably prevent potential SQLite deadlocks resulting from multiple
+|To reliably prevent potential L<SQLite> deadlocks resulting from multiple
 |connections in a single process, each ORLite package will only ever
 |maintain a single connection to the database.
 |
@@ -363,11 +395,11 @@ sub template_db { <<"END_TT" }
 |
 |Although in most situations you should not need a direct DBI connection
 |handle, the C<dbh> method provides a method for getting a direct
-|connection in a way that is compatible with ORLite's connection
-|management.
+|connection in a way that is compatible with connection management in
+|L<ORLite>.
 |
 |Please note that these connections should be short-lived, you should
-|never hold onto a connection beyond the immediate scope.
+|never hold onto a connection beyond your immediate scope.
 |
 |The transaction system in ORLite is specifically designed so that code
 |using the database should never have to know whether or not it is in a
@@ -392,7 +424,7 @@ sub template_db { <<"END_TT" }
 [% IF method.begin %]
 |=head2 begin
 |
-|  Foo::Bar->begin;
+|  [%+ pkg %]->begin;
 |
 |The C<begin> method indicates the start of a transaction.
 |
@@ -409,7 +441,7 @@ sub template_db { <<"END_TT" }
 [% IF method.commit %]
 |=head2 commit
 |
-|  Foo::Bar->commit;
+|  [%+ pkg %]->commit;
 |
 |The C<commit> method commits the current transaction. If called outside
 |of a current transaction, it is accepted and treated as a null operation.
@@ -438,7 +470,8 @@ sub template_db { <<"END_TT" }
 |
 |=head2 do
 |
-|  Foo::Bar->do('insert into table (foo, bar) values (?, ?)', {},
+|  [%+ pkg %]->do(
+|      'insert into table ( foo, bar ) values ( ?, ? )', {},
 |      \$foo_value,
 |      \$bar_value,
 |  );
@@ -535,17 +568,17 @@ sub template_db { <<"END_TT" }
 |=head2 pragma
 |
 |  # Get the user_version for the schema
-|  my \$version = Foo::Bar->pragma('user_version');
+|  my $version = [% pkg %]->pragma('user_version');
 |
 |The C<pragma> method provides a convenient method for fetching a pragma
-|for a datase. See the SQLite documentation for more details.
+|for a database. See the L<SQLite> documentation for more details.
 |
 [% END %]
 |=head1 SUPPORT
 |
-|[%+ pkg %] is based on L<ORLite> $ORLite::VERSION.
+|B<[%+ pkg %]> is based on L<ORLite>.
 |
-|Documentation created by L<ORLite::Pod> $ORLite::Pod::VERSION.
+|Documentation created by L<ORLite::Pod> [% orlite2pod %].
 |
 |[% IF self.rt %]
 |Bugs should be reported via the CPAN bug tracker at
@@ -553,15 +586,16 @@ sub template_db { <<"END_TT" }
 |L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=[% self.dist %]>
 |
 |For other issues, contact the author.
-|[% ELSE %]
+[% ELSE %]
 |For general support please see the support section of the main
 |project documentation.
-|[% END %]
+[% END %]
 |
+[% IF self.author_pod %]
 |=head1 AUTHOR
 |
-|[%+ self.author %]
-|
+|[%+ self.author_pod %]
+[% END %]
 |=head1 COPYRIGHT
 |
 |Copyright [% self.copyyear %] [%+ self.author %].
@@ -581,14 +615,10 @@ END_TT
 #####################################################################
 # Table Template
 
-sub template_table { <<"END_TT" }
+sub template_table { <<'END_TT' }
 |=head1 NAME
 |
 |[%+ pkg %] - [% root %] class for the [% table.name %] table
-|
-|=head1 SYNOPSIS
-|
-|  TO BE COMPLETED
 |
 |=head1 DESCRIPTION
 |
@@ -596,14 +626,57 @@ sub template_table { <<"END_TT" }
 |
 |=head1 METHODS
 |
+[% IF method.base %]
+|=head2 base
+|
+|  # Returns '[% root %]'
+|  my $namespace = [% pkg %]->base;
+|
+|Normally you will only need to work directly with a table class,
+|and only with one ORLite package.
+|
+|However, if for some reason you need to work with multiple ORLite packages
+|at the same time without hardcoding the root namespace all the time, you
+|can determine the root namespace from an object or table class with the
+|C<base> method.
+|
+[% END %]
+[% IF method.table %]
+|=head2 table
+|
+|  # Returns '[% table.name %]'
+|  print [% pkg %]->table;
+|
+|While you should not need the name of table for any simple operations,
+|from time to time you may need it programatically. If you do need it,
+|you can use the C<table> method to get the table name.
+|
+[% END %]
+[% IF method.load %]
+|=head2 load
+|
+|  my $object = [% pkg %]->load( $[% table.pk %] );
+|
+|If your table has single column primary key, a C<load> method will be
+|generated in the class. If there is no primary key, the method is not
+|created.
+|
+|The C<load> method provides a shortcut mechanism for fetching a single
+|object based on the value of the primary key. However it should only
+|be used for cases where your code trusts the record to already exists.
+|
+|It returns a C<[% pkg %]> object, or throws an exception if the
+|object does not exist.
+|
+[% END %]
 [% IF method.select %]
 |=head2 select
 |
 |  # Get all objects in list context
-|  my \@list = [% pkg %]->select;
+|  my @list = [% pkg %]->select;
 |  
 |  # Get a subset of objects in scalar context
-|  my \$array_ref = [% pkg %]->select(
+|  my $array_ref = [% pkg %]->select(
 |      'where [% table.pk %] > ? order by [% table.pk %]',
 |      1000,
 |  );
@@ -617,19 +690,67 @@ sub template_table { <<"END_TT" }
 |compatible with SQLite can be used in the parameter.
 |
 |Returns a list of B<[% pkg %]> objects when called in list context, or a
-|reference to an ARRAY of B<[% pkg %]> objects when called in scalar context.
+|reference to an C<ARRAY> of B<[% pkg %]> objects when called in scalar
+| context.
 |
 |Throws an exception on error, typically directly from the L<DBI> layer.
+|
+[% END %]
+[% IF method.iterate %]
+|=head2 iterate
+|
+|  [%+ pkg %]->iterate( sub {
+|      print $_->[% table.pk %] . "\n";
+|  } );
+|
+|The C<iterate> method enables the processing of large tables one record at
+|a time without loading having to them all into memory in advance.
+|
+|This plays well to the strength of SQLite, allowing it to do the work of
+|loading arbitrarily large stream of records from disk while retaining the
+|full power of Perl when processing the records.
+|
+|The last argument to C<iterate> must be a subroutine reference that will be
+|called for each element in the list, with the object provided in the topic
+|variable C<$_>.
+|
+|This makes the C<iterate> code fragment above functionally equivalent to the
+|following, except with an O(1) memory cost instead of O(n).
+|
+|  foreach ( [% pkg %]->select ) {
+|      print $_->[% table.pk %] . "\n";
+|  }
+|
+|You can filter the list via SQL in the same way you can with C<select>.
+|
+|  [%+ pkg %]->iterate(
+|      'order by ?', '[% table.pk %]',
+|      sub {
+|          print $_->[% table.pk %] . "\n";
+|      }
+|  );
+|
+|You can also use it in raw form from the root namespace for better control.
+|Using this form also allows for the use of arbitrarily complex queries,
+|including joins. Instead of being objects, rows are provided as C<ARRAY>
+|references when used in this form.
+|
+|  [%+ root %]->iterate(
+|      'select name from [% table.name %] order by [% table.pk %]',
+|      sub {
+|          print $_->[0] . "\n";
+|      }
+|  );
 |
 [% END %]
 [% IF method.count %]
 |=head2 count
 |
 |  # How many objects are in the table
-|  my \$rows = [% pkg %]->count;
+|  my $rows = [% pkg %]->count;
 |  
 |  # How many objects 
-|  my \$small = [% pkg %]->count(
+|  my $small = [% pkg %]->count(
 |      'where [% table.pk %] > ?',
 |      1000,
 |  );
@@ -661,7 +782,7 @@ sub template_table { <<"END_TT" }
 [% IF method.create %]
 |=head2 create
 |
-|  my \$object = [% pkg %]->create(
+|  my $object = [% pkg %]->create(
 |[%+ FOREACH column IN table.columns %]
 |      [%+ column.name %] => 'value',
 |[%+ END %]
@@ -669,21 +790,21 @@ sub template_table { <<"END_TT" }
 |
 |The C<create> constructor is a one-step combination of C<new> and
 |C<insert> that takes the column parameters, creates a new
-|L<[% pkg %]> object, inserts the appropriate row into the L<[% table.name %]>
-|table, and then returns the object.
+|L<[% pkg %]> object, inserts the appropriate row into the
+|L<[% table.name %]> table, and then returns the object.
 |
 |If the primary key column C<[% table.pk %]> is not provided to the
 |constructor (or it is false) the object returned will have
 |C<[% table.pk %]> set to the new unique identifier.
 | 
-|Returns a new L<[% table.name %]> object, or throws an exception on error,
-|typically from the L<DBI> layer.
+|Returns a new L<[% table.name %]> object, or throws an exception on
+|error, typically from the L<DBI> layer.
 |
 [% END %]
 [% IF method.insert %]
 |=head2 insert
 |
-|  \$object->insert;
+|  $object->insert;
 |
 |The C<insert> method commits a new object (created with the C<new> method)
 |into the database.
@@ -700,7 +821,7 @@ sub template_table { <<"END_TT" }
 |=head2 delete
 |
 |  # Delete a single instantiated object
-|  \$object->delete;
+|  $object->delete;
 |  
 |  # Delete multiple rows from the [% table.name %] table
 |  [%+ pkg %]->delete('where [% table.pk %] > ?', 1000);
@@ -741,19 +862,18 @@ sub template_table { <<"END_TT" }
 |=head1 ACCESSORS
 |
 [% pk = table.pk %]
-[% IF method.\$pk %]
+[% IF method.$pk %]
 |=head2 [% pk %]
 |
-|  if ( \$object->[% pk %] ) {
-|      print "Object has been inserted\\n";
+|  if ( $object->[% pk %] ) {
+|      print "Object has been inserted\n";
 |  } else {
-|      print "Object has not been inserted\\n";
+|      print "Object has not been inserted\n";
 |  }
 |
 |Returns true, or throws an exception on error.
 |
 [% END %]
-|
 |REMAINING ACCESSORS TO BE COMPLETED
 |
 |=head1 SQL
@@ -761,7 +881,7 @@ sub template_table { <<"END_TT" }
 |The [% table.name %] table was originally created with the
 |following SQL command.
 |
-|[%+ table.sql.create | indent('  ')%]
+|[%+ table.create | indent('  ') -%]
 |
 |=head1 SUPPORT
 |
@@ -769,10 +889,12 @@ sub template_table { <<"END_TT" }
 |
 |See the documentation for L<[% root %]> for more information.
 |
+[% IF self.author_pod %]
 |=head1 AUTHOR
 |
-|[%+ self.author %]
+|[%+ self.author_pod %]
 |
+[% END %]
 |=head1 COPYRIGHT
 |
 |Copyright [% self.copyyear %] [%+ self.author %].
@@ -803,7 +925,7 @@ Adam Kennedy E<lt>adamk@cpan.orgE<gt>
 
 =head1 COPYRIGHT
 
-Copyright 2009 Adam Kennedy.
+Copyright 2009 - 2010 Adam Kennedy.
 
 This program is free software; you can redistribute
 it and/or modify it under the same terms as Perl itself.

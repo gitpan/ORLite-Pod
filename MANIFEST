@@ -2,11 +2,12 @@ Changes
 inc/Module/Install.pm
 inc/Module/Install/Base.pm
 inc/Module/Install/Can.pm
+inc/Module/Install/DSL.pm
 inc/Module/Install/Fetch.pm
 inc/Module/Install/Makefile.pm
 inc/Module/Install/Metadata.pm
+inc/Module/Install/Scripts.pm
 inc/Module/Install/Win32.pm
-inc/Module/Install/With.pm
 inc/Module/Install/WriteAll.pm
 lib/ORLite/Pod.pm
 LICENSE
@@ -16,6 +17,9 @@ META.yml
 README
 script/orlite2pod
 t/01_compile.t
-t/97_meta.t
-t/98_pod.t
-t/99_pmv.t
+t/02_basics.sql
+t/02_basics.t
+t/lib/Test.pm
+xt/meta.t
+xt/pmv.t
+xt/pod.t

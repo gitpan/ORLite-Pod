@@ -6,15 +6,12 @@ SYNOPSIS
           from   => 'My::Project::DB',
           to     => 'My-Project/lib',
           author => 'Adam Kennedy',
+          email  => 'adamk@cpan.org',
       );
-  
-      $generator->run;
+      
+  $generator->run;
 
 DESCRIPTION
-    THIS MODULE IS EXPERIMENTAL AND SUBJECT TO CHANGE WITHOUT NOTICE.
-
-    YOU HAVE BEEN WARNED!
-
     The biggest downside of ORLite is that because it can generate you an
     entire ORM in one line of code, you can have a large an extensive API
     without anywhere for documentation for the API to exist.
@@ -44,7 +41,7 @@ AUTHOR
     Adam Kennedy <adamk@cpan.org>
 
 COPYRIGHT
-    Copyright 2009 Adam Kennedy.
+    Copyright 2009 - 2010 Adam Kennedy.
 
     This program is free software; you can redistribute it and/or modify it
     under the same terms as Perl itself.
