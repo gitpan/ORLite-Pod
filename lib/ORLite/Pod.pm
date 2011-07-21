@@ -51,7 +51,7 @@ use Class::Inspector   1.23 ();
 use ORLite             1.23 ();
 use Template           2.20 ();
 
-our $VERSION = '0.10';
+our $VERSION = '0.11';
 
 my $year = (localtime(time))[5] + 1900;
 
@@ -814,9 +814,9 @@ sub template_table { <<'END_TT' }
 |=head2 create
 |
 |  my $object = [% pkg %]->create(
-|[%+ FOREACH column IN table.columns %]
+|[%- FOREACH column IN table.columns %]
 |      [%+ column.name %] => 'value',
-|[%+ END %]
+|[%- END %]
 |  );
 |
 |The C<create> constructor is a one-step combination of C<new> and
@@ -956,7 +956,7 @@ Adam Kennedy E<lt>adamk@cpan.orgE<gt>
 
 =head1 COPYRIGHT
 
-Copyright 2009 - 2010 Adam Kennedy.
+Copyright 2009 - 2011 Adam Kennedy.
 
 This program is free software; you can redistribute
 it and/or modify it under the same terms as Perl itself.
